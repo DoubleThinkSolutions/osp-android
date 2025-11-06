@@ -7,13 +7,18 @@ import com.doublethinksolutions.osp.broadcast.AuthEvent
 import com.doublethinksolutions.osp.broadcast.AuthEventBus
 import com.doublethinksolutions.osp.data.DeviceOrientation
 import com.doublethinksolutions.osp.data.PhotoMetadata
+import com.doublethinksolutions.osp.data.SerializableDeviceOrientation
+import com.doublethinksolutions.osp.data.SerializablePhotoMetadata
 import com.doublethinksolutions.osp.network.NetworkClient
+import com.doublethinksolutions.osp.signing.MediaSigner
+import com.doublethinksolutions.osp.signing.SignaturePackage
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -26,6 +31,8 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 
+private fun ByteArray.toHexString(): String = joinToString("") { "%02x".format(it) }
+
 /**
  * Data class to model the JSON response from the backend upon successful upload.
  */
@@ -37,39 +44,28 @@ data class UploadResponse(
     val orientation: DeviceOrientation,
     val trust_score: Double,
     val user_id: String,
-    val file_path: String
+    val file_path: String,
+    val verification_status: String
 )
 
 object UploadManager {
     private const val TAG = "UploadManager"
-    private val gson = Gson()
-
-    /**
-     * A private DTO that exactly matches the JSON structure expected by the FastAPI backend.
-     */
-    private data class UploadMetadata(
-        val capture_time: String,
-        val lat: Double,
-        val lng: Double,
-        val orientation: DeviceOrientation
-    )
 
     suspend fun upload(
         context: Context,
         file: File,
-        metadata: PhotoMetadata?,
+        metadata: SerializablePhotoMetadata?,
+        signaturePackage: SignaturePackage,
         onProgress: (Float) -> Unit,
         onSuccess: (responseData: UploadResponse, durationMs: Long) -> Unit,
         onFailure: (Exception) -> Unit
     ) {
-        // We'll wrap the core logic to allow for a single retry.
         var attempt = 0
         val maxAttempts = 2
 
         while (attempt < maxAttempts) {
             attempt++
             try {
-                // Call the actual upload logic
                 performUpload(context, file, metadata, onProgress, onSuccess, onFailure)
                 // If it succeeds, we're done.
                 return
@@ -110,51 +106,45 @@ object UploadManager {
     private suspend fun performUpload(
         context: Context,
         file: File,
-        metadata: PhotoMetadata?,
+        metadata: SerializablePhotoMetadata?,
         onProgress: (Float) -> Unit,
         onSuccess: (responseData: UploadResponse, durationMs: Long) -> Unit,
         onFailure: (Exception) -> Unit
     ) {
         val uploadStartTimestamp = System.currentTimeMillis()
-        if (!file.exists()) {
-            throw IOException("File does not exist at path: ${file.path}")
-        }
+        if (!file.exists()) throw IOException("File does not exist: ${file.path}")
+        if (metadata == null) throw IllegalArgumentException("Metadata cannot be null.")
 
-        // 2. Prepare metadata part
-        val metadataRequestBody = metadata?.let { photoMetadata ->
+        // 1. Serialize the full, rich metadata object into our canonical JSON string.
+        val metadataJsonString = Json.encodeToString(metadata)
+        Log.d(TAG, "Canonical metadata for signing/upload: $metadataJsonString")
 
-            // Convert milliseconds timestamp to ISO 8601 UTC string (e.g., "2025-08-14T17:30:41.043Z")
-            val captureTimeIso = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                // API 26+ uses java.time.Instant
-                Instant.ofEpochMilli(photoMetadata.timestamp).toString()
-            } else {
-                // Older devices: format manually to UTC ISO 8601
-                val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ROOT)
-                sdf.timeZone = TimeZone.getTimeZone("UTC")
-                sdf.format(Date(photoMetadata.timestamp))
-            }
+        // 2. Sign the data using this exact JSON string.
+        val signaturePackage = MediaSigner.sign(file, metadataJsonString)
+            ?: throw IOException("Failed to sign media. Signature package was null.")
 
-            // Create the DTO that matches the server's expected format
-            val uploadMetadata = UploadMetadata(
-                capture_time = captureTimeIso,
-                // Extract lat/lng, providing 0.0 as a fallback if location is null
-                lat = photoMetadata.location?.latitude ?: 0.0,
-                lng = photoMetadata.location?.longitude ?: 0.0,
-                orientation = photoMetadata.deviceOrientation ?: DeviceOrientation(0f,0f,0f)
-            )
+        // 3. Use the same string for the request body.
+        val metadataRequestBody = metadataJsonString.toRequestBody("application/json".toMediaTypeOrNull())
+        val filePart = MultipartBody.Part.createFormData("file", file.name, metadataRequestBody)
 
-            // Serialize the *new* DTO object, not the original PhotoMetadata
-            gson.toJson(uploadMetadata).toRequestBody("application/json".toMediaTypeOrNull())
-        }
+        val signatureRequestBody = signaturePackage.signature.toRequestBody("application/octet-stream".toMediaTypeOrNull())
+        val publicKeyRequestBody = signaturePackage.publicKey.toRequestBody("application/octet-stream".toMediaTypeOrNull())
+        // Hashes are sent as hex strings for easy handling on the backend
+        val mediaHashRequestBody = signaturePackage.mediaHash.toHexString().toRequestBody("text/plain".toMediaTypeOrNull())
+        val metadataHashRequestBody = signaturePackage.metadataHash.toHexString().toRequestBody("text/plain".toMediaTypeOrNull())
+        val attestationChainRequestBody =
+            signaturePackage.attestationChain?.joinToString(",") { it.toHexString() }?.toRequestBody("text/plain".toMediaTypeOrNull())
 
-        val mimeType = getMimeType(file)
-        val fileRequestBody = file.asProgressRequestBody(mimeType.toMediaTypeOrNull()) { progress ->
-            onProgress(progress)
-        }
-        val filePart = MultipartBody.Part.createFormData("file", file.name, fileRequestBody)
-
-        Log.d(TAG, "Starting upload for ${file.name}...")
-        val response = NetworkClient.mediaApiService.uploadMedia(filePart, metadataRequestBody)
+        Log.d(TAG, "Starting upload for ${file.name} with signature package...")
+        val response = NetworkClient.mediaApiService.uploadMedia(
+            file = filePart,
+            metadata = metadataRequestBody,
+            signature = signatureRequestBody,
+            publicKey = publicKeyRequestBody,
+            mediaHash = mediaHashRequestBody,
+            metadataHash = metadataHashRequestBody,
+            attestationChain = attestationChainRequestBody
+        )
 
         if (response.isSuccessful) {
             val responseData = response.body()

@@ -139,7 +139,6 @@ object LocationProvider {
     }
 
     private fun hasLocationPermission(context: Context): Boolean {
-        // ... (this method remains unchanged)
         return ContextCompat.checkSelfPermission(
             context, Manifest.permission.ACCESS_FINE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(

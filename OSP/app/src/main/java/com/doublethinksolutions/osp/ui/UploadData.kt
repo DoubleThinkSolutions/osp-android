@@ -4,7 +4,7 @@ import java.util.UUID
 
 // Enum to represent the status of an upload
 enum class UploadStatus {
-    QUEUED, UPLOADING, SUCCESS, FAILED
+    QUEUED, UPLOADING, SUCCESS, FAILED, SIGNING
 }
 
 // Data class to hold the final results of a successful upload

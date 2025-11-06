@@ -13,20 +13,15 @@ import retrofit2.http.Part
  */
 interface MediaApiService {
 
-    /**
-     * Uploads a media file along with its associated metadata.
-     * This uses a multipart request to send both the binary file data and
-     * the JSON metadata in a single call.
-     *
-     * @param file The media file part of the request. The name of this part should be "file".
-     * @param metadata The JSON metadata part of the request. The name of this part is "metadata".
-     * @return A Retrofit Response. A successful upload should return a 2xx status code.
-     *         We use Response<Unit> because we only care about the success status, not a response body.
-     */
     @Multipart
     @POST("media")
     suspend fun uploadMedia(
         @Part file: MultipartBody.Part,
-        @Part("metadata") metadata: RequestBody?
+        @Part("metadata") metadata: RequestBody?,
+        @Part("signature") signature: RequestBody,
+        @Part("public_key") publicKey: RequestBody,
+        @Part("media_hash") mediaHash: RequestBody,
+        @Part("metadata_hash") metadataHash: RequestBody,
+        @Part("attestation_chain") attestationChain: RequestBody? = null
     ): Response<UploadResponse>
 }

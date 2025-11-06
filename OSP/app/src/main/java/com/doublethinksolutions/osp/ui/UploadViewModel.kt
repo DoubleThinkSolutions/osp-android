@@ -5,6 +5,8 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.doublethinksolutions.osp.data.PhotoMetadata
+import com.doublethinksolutions.osp.data.SerializablePhotoMetadata
+import com.doublethinksolutions.osp.signing.MediaSigner
 import com.doublethinksolutions.osp.upload.UploadManager
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,16 +31,31 @@ class UploadViewModel : ViewModel() {
     private val _uploadHistory = MutableStateFlow<List<UploadItem>>(emptyList())
     val uploadHistory: StateFlow<List<UploadItem>> = _uploadHistory.asStateFlow()
 
-    fun startUpload(context: Context, photoFile: File, metadata: PhotoMetadata?) {
+    fun startUpload(context: Context, photoFile: File, metadata: SerializablePhotoMetadata?) {
         val newItem = UploadItem(fileName = photoFile.name)
         // Add to the front of the queue
         _uploadQueue.update { listOf(newItem) + it }
 
         viewModelScope.launch {
+            // --- SIGNING STEP ---
+            updateUploadItem(newItem.id) { it.copy(status = UploadStatus.SIGNING) }
+            val signaturePackage = metadata?.let { MediaSigner.sign(photoFile, it) }
+
+            if (signaturePackage == null) {
+                Log.e("ViewModel", "Signing failed for ${newItem.fileName}")
+                updateUploadItem(newItem.id) {
+                    it.copy(status = UploadStatus.FAILED, errorMessage = "Signing failed")
+                }
+                scheduleForArchival(newItem.id)
+                return@launch
+            }
+            Log.d("ViewModel", "Signing successful for ${newItem.fileName}")
+
             UploadManager.upload(
                 context = context,
                 file = photoFile,
                 metadata = metadata,
+                signaturePackage = signaturePackage,
                 onProgress = { progress ->
                     updateUploadItem(newItem.id) { it.copy(status = UploadStatus.UPLOADING, progress = progress) }
                 },

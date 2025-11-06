@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.HourglassTop
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -166,6 +167,7 @@ private fun UploadItemRow(item: UploadItem) {
             UploadStatus.UPLOADING -> Icons.Default.CloudUpload to MaterialTheme.colorScheme.primary
             UploadStatus.SUCCESS -> Icons.Default.CheckCircle to Color(0xFF66BB6A)
             UploadStatus.FAILED -> Icons.Default.Error to MaterialTheme.colorScheme.error
+            UploadStatus.SIGNING -> Icons.Default.Lock to MaterialTheme.colorScheme.primary
         }
         Icon(imageVector = icon, contentDescription = item.status.name, tint = color, modifier = Modifier.size(20.dp))
         Text(

@@ -33,6 +33,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.doublethinksolutions.osp.R
 import com.doublethinksolutions.osp.data.PhotoMetadata
+import com.doublethinksolutions.osp.data.SerializablePhotoMetadata
 import com.doublethinksolutions.osp.tasks.LocationProvider
 import com.doublethinksolutions.osp.tasks.MetadataCollectionTask
 import com.doublethinksolutions.osp.tasks.OrientationProvider
@@ -341,7 +342,7 @@ private suspend fun takePhoto(
     imageCapture: ImageCapture,
     viewModel: UploadViewModel
 ) {
-    val metadata: PhotoMetadata? = try {
+    val metadata: SerializablePhotoMetadata? = try {
         MetadataCollectionTask().collect()
     } catch (e: Exception) {
         Log.e("CameraScreen", "Metadata collection failed", e)
@@ -370,7 +371,7 @@ private suspend fun startRecording(
     viewModel: UploadViewModel,
     onRecordingStarted: (Boolean) -> Unit
 ): Recording {
-    val metadata: PhotoMetadata? = try {
+    val metadata: SerializablePhotoMetadata? = try {
         MetadataCollectionTask().collect()
     } catch (e: Exception) {
         Log.e("CameraScreen", "Metadata collection failed", e)
